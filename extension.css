@@ -1,0 +1,65 @@
+.bcp-star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2em;
+  margin-right: 6px;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.85;
+  color: #8a6b00;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 1em;
+  line-height: 1;
+}
+.bcp-star:hover {
+  opacity: 1;
+  color: #7a5c00;
+}
+.bcp-star:focus {
+  outline: 1px solid rgba(0, 0, 0, 0.35);
+  outline-offset: 2px;
+}
+.bcp-star[data-pinned="1"] {
+  color: #d4a200;
+}
+.bcp-sort-controls {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 11px;
+  text-align: right;
+}
+.bcp-sort-label {
+  opacity: 0.7;
+}
+.bcp-sort-button {
+  background: #f3f3f3;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.bcp-sort-button:hover {
+  background: #eaeaea;
+}
+.bcp-sort-button[data-active="1"] {
+  background: #d6e7ff;
+  border-color: #a9c7ff;
+}
+.bcp-menu-divider {
+  margin: 4px 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.15);
+  opacity: 0.8;
+}
+.bcp-sort-button:focus,
+.bcp-star:focus {
+  outline: 2px solid #4c8bf5;
+  outline-offset: 2px;
+}
