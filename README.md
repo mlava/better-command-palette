@@ -8,8 +8,9 @@ This extension is intentionally lightweight, safe, and non-invasive:
 - ✅ **Does not override Roam commands**
 - ✅ Works entirely at the **UI layer** (DOM decoration + reordering)
 
-<img src="demo.gif" alt="Demo" width="40%" />
-
+<p align="center">
+<img src="demo.gif" alt="Demo of Better Command Palette" width="40%" />
+</p>
 ---
 
 ## ✨ Features
