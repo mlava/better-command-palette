@@ -8,7 +8,7 @@ This extension is intentionally lightweight, safe, and non-invasive:
 - ✅ **Does not override Roam commands**
 - ✅ Works entirely at the **UI layer** (DOM decoration + reordering)
 
-<img src="demo.gif" alt="Demo" width="20%" />
+<img src="demo.gif" alt="Demo" width="40%" />
 
 ---
 
