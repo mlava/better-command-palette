@@ -11,6 +11,7 @@ This extension is intentionally lightweight, safe, and non-invasive:
 <p align="center">
 <img src="demo.gif" alt="Demo of Better Command Palette" width="40%" />
 </p>
+
 ---
 
 ## ✨ Features
