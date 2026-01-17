@@ -8,7 +8,7 @@ This extension is intentionally lightweight, safe, and non-invasive:
 - ✅ **Does not override Roam commands**
 - ✅ Works entirely at the **UI layer** (DOM decoration + reordering)
 
-![Better Command Palette in action](https://github.com/mlava/better-command-palette/blob/7839cbc6900dbb693055863e1751c23adffcb746/demo.gif)
+<img src="demo.gif" alt="Demo" width="20%" />
 
 ---
 
