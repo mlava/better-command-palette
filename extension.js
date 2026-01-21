@@ -64,25 +64,33 @@ function findPalettePortal() {
 
 function computeItemKey(itemEl) {
     const labelSpan = itemEl.querySelector(".rm-command-palette__label span");
-    const rawLabel = labelSpan ? labelSpan.innerText.trim() : "";
+    const rawLabel = labelSpan ? labelSpan.textContent.trim() : "";
     if (!rawLabel) {
         return { key: null, labelLower: "" };
     }
-
-    const shortcutEls = itemEl.querySelectorAll(".rm-command-palette__shortcut");
-    const shortcutText = Array.from(shortcutEls)
-        .map((el) => el.innerText.trim())
-        .filter(Boolean)
-        .join(",");
 
     const labelNorm = normalizeText(rawLabel);
     if (!labelNorm) {
         return { key: null, labelLower: "" };
     }
 
-    const key = shortcutText
-        ? `${labelNorm}||${normalizeText(shortcutText)}`
-        : labelNorm;
+    const shortcutEls = itemEl.querySelectorAll(".rm-command-palette__shortcut");
+    const shortcutText = Array.from(shortcutEls)
+        .map((el) => (el.textContent || "").trim())
+        .filter(Boolean)
+        .join(",");
+    const shortcutNorm = shortcutText ? normalizeText(shortcutText) : "";
+
+    const cachedLabel = itemEl.dataset.bcpLabelLower;
+    const cachedShortcut = itemEl.dataset.bcpShortcutLower;
+    const cachedKey = itemEl.dataset.bcpKey;
+    if (cachedKey && cachedLabel === labelNorm && cachedShortcut === shortcutNorm) {
+        return { key: cachedKey, labelLower: labelNorm };
+    }
+
+    const key = shortcutNorm ? `${labelNorm}||${shortcutNorm}` : labelNorm;
+    itemEl.dataset.bcpLabelLower = labelNorm;
+    itemEl.dataset.bcpShortcutLower = shortcutNorm;
 
     return { key, labelLower: labelNorm };
 }
@@ -302,7 +310,7 @@ function decorateAndApplyPinning(targetPortalEl) {
     updateSortControlsState(targetPortalEl);
     if (menuObserver) {
         menuObserver.disconnect();
-        menuObserver.observe(menuEl, { childList: true, subtree: false });
+        menuObserver.observe(menuEl, { childList: true, subtree: true });
     }
     decorateInProgress = false;
 }
@@ -332,7 +340,7 @@ function attachMenuObserver(targetPortalEl) {
                     scheduleDecorate();
                 }
             });
-            menuObserver.observe(menuEl, { childList: true, subtree: false });
+            menuObserver.observe(menuEl, { childList: true, subtree: true });
             menuObservedEl = menuEl;
         }
         return;
