@@ -9,7 +9,7 @@ This extension is intentionally lightweight, safe, and non-invasive:
 - ✅ Works entirely at the **UI layer** (DOM decoration + reordering)
 
 <p align="center">
-<img src="demo.gif" alt="Demo of Better Command Palette" width="40%" />
+<img src="https://raw.githubusercontent.com/mlava/better-command-palette/f579f7c9fe2be3d7e135b01abfdfa4b8d536dc9d/demo.gif" alt="Demo of Better Command Palette" width="40%" />
 </p>
 
 ---
@@ -69,6 +69,8 @@ Clearing the extension’s settings resets all pins and returns sorting to Roam 
   - label text, and
   - shortcut (when present)
 - Reorders the menu **in place** using Roam’s existing DOM nodes
+- Keeps keyboard navigation aligned with the visible order, even when pinned/sorted
+- When pins exist, the first pinned command becomes the initial active item on open
 - Resets cleanly when the palette closes
 
 ---
