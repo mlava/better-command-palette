@@ -15,7 +15,8 @@ let menuObservedEl = null;
 let portalObserver = null;
 let menuObserver = null;
 let menuFinderObserver = null;
-let debounceTimer = null;
+let decorateRaf = null;
+let decoratePending = false;
 let reorderInProgress = false;
 let decorateInProgress = false;
 let paletteKeydownHandler = null;
@@ -24,6 +25,11 @@ let needsInitialActive = false;
 let lastActiveKey = null;
 let menuClickHandler = null;
 let menuClickTarget = null;
+let menuVersion = 0;
+let keydownCacheVersion = -1;
+let keydownCacheMenuEl = null;
+let keydownVisibleItems = [];
+const itemMetaCache = new WeakMap();
 
 function normalizeText(text) {
     return text.trim().replace(/\s+/g, " ").toLowerCase();
@@ -69,9 +75,20 @@ function findPalettePortal() {
 }
 
 function computeItemKey(itemEl) {
-    const labelSpan = itemEl.querySelector(".rm-command-palette__label span");
-    const rawLabel = labelSpan ? labelSpan.textContent.trim() : "";
+    const cached = itemMetaCache.get(itemEl) || {};
+    let labelSpan = cached.labelSpan;
+    if (!labelSpan || !itemEl.contains(labelSpan)) {
+        labelSpan = itemEl.querySelector(".rm-command-palette__label span");
+    }
+    const rawLabel = labelSpan ? (labelSpan.textContent || "").trim() : "";
     if (!rawLabel) {
+        cached.labelSpan = labelSpan;
+        cached.rawLabel = "";
+        cached.shortcutText = "";
+        cached.shortcutNorm = "";
+        cached.labelLower = "";
+        cached.key = null;
+        itemMetaCache.set(itemEl, cached);
         return { key: null, labelLower: "" };
     }
 
@@ -80,23 +97,38 @@ function computeItemKey(itemEl) {
         return { key: null, labelLower: "" };
     }
 
-    const shortcutEls = itemEl.querySelectorAll(".rm-command-palette__shortcut");
-    const shortcutText = Array.from(shortcutEls)
+    let shortcutEls = cached.shortcutEls;
+    if (
+        !Array.isArray(shortcutEls) ||
+        shortcutEls.some((el) => !itemEl.contains(el))
+    ) {
+        shortcutEls = Array.from(
+            itemEl.querySelectorAll(".rm-command-palette__shortcut"),
+        );
+    }
+    const shortcutText = shortcutEls
         .map((el) => (el.textContent || "").trim())
         .filter(Boolean)
         .join(",");
     const shortcutNorm = shortcutText ? normalizeText(shortcutText) : "";
 
-    const cachedLabel = itemEl.dataset.bcpLabelLower;
-    const cachedShortcut = itemEl.dataset.bcpShortcutLower;
-    const cachedKey = itemEl.dataset.bcpKey;
-    if (cachedKey && cachedLabel === labelNorm && cachedShortcut === shortcutNorm) {
-        return { key: cachedKey, labelLower: labelNorm };
+    if (
+        cached.key &&
+        cached.rawLabel === rawLabel &&
+        cached.shortcutText === shortcutText
+    ) {
+        return { key: cached.key, labelLower: cached.labelLower };
     }
 
     const key = shortcutNorm ? `${labelNorm}||${shortcutNorm}` : labelNorm;
-    itemEl.dataset.bcpLabelLower = labelNorm;
-    itemEl.dataset.bcpShortcutLower = shortcutNorm;
+    cached.labelSpan = labelSpan;
+    cached.shortcutEls = shortcutEls;
+    cached.rawLabel = rawLabel;
+    cached.shortcutText = shortcutText;
+    cached.shortcutNorm = shortcutNorm;
+    cached.labelLower = labelNorm;
+    cached.key = key;
+    itemMetaCache.set(itemEl, cached);
 
     return { key, labelLower: labelNorm };
 }
@@ -122,12 +154,19 @@ function setStarState(starEl, pinned) {
 }
 
 function ensureStar(itemEl, pinned, key) {
-    const labelContainer = itemEl.querySelector(".rm-command-palette__label");
+    const cached = itemMetaCache.get(itemEl) || {};
+    let labelContainer = cached.labelContainer;
+    if (!labelContainer || !itemEl.contains(labelContainer)) {
+        labelContainer = itemEl.querySelector(".rm-command-palette__label");
+    }
     if (!labelContainer) {
         return;
     }
 
-    let starEl = labelContainer.querySelector(`[${STAR_ATTR}="1"]`);
+    let starEl = cached.starEl;
+    if (!starEl || !labelContainer.contains(starEl)) {
+        starEl = labelContainer.querySelector(`[${STAR_ATTR}="1"]`);
+    }
     if (!starEl) {
         starEl = document.createElement("button");
         starEl.type = "button";
@@ -141,11 +180,18 @@ function ensureStar(itemEl, pinned, key) {
         labelContainer.prepend(starEl);
     }
 
-    if (key) {
+    if (key && starEl.dataset.bcpKey !== key) {
         starEl.dataset.bcpKey = key;
     }
 
-    setStarState(starEl, pinned);
+    const nextPinned = pinned ? "1" : "0";
+    if (starEl.getAttribute("data-pinned") !== nextPinned) {
+        setStarState(starEl, pinned);
+    }
+
+    cached.labelContainer = labelContainer;
+    cached.starEl = starEl;
+    itemMetaCache.set(itemEl, cached);
 }
 
 function onStarClick(event) {
@@ -195,6 +241,7 @@ function compareLabels(a, b, direction) {
 
 function reorderMenu(menuEl, items) {
     reorderInProgress = true;
+    const wasReordered = menuEl.dataset.bcpReordered === "1";
     const pinnedItems = items.filter((item) => item.key && pinnedSet.has(item.key));
     const unpinnedItems = items.filter(
         (item) => !item.key || !pinnedSet.has(item.key),
@@ -217,6 +264,11 @@ function reorderMenu(menuEl, items) {
     } else if (separatorEl) {
         separatorEl.remove();
         separatorEl = null;
+    }
+
+    if (!hasCustomOrder && !wasReordered) {
+        reorderInProgress = false;
+        return;
     }
 
     pinnedItems.sort((a, b) => {
@@ -302,6 +354,25 @@ function normalizeActiveItem(menuEl) {
     }
 }
 
+function getVisibleItemsForKeydown(menuEl) {
+    if (!menuEl) return [];
+
+    if (
+        !decoratePending &&
+        keydownCacheMenuEl === menuEl &&
+        keydownCacheVersion === menuVersion
+    ) {
+        return keydownVisibleItems;
+    }
+
+    keydownVisibleItems = Array.from(
+        menuEl.querySelectorAll(".rm-menu-item.bp3-menu-item"),
+    ).filter((item) => item.getClientRects().length > 0);
+    keydownCacheMenuEl = menuEl;
+    keydownCacheVersion = menuVersion;
+    return keydownVisibleItems;
+}
+
 function handlePaletteKeydown(event) {
     if (!paletteOpen || !portalEl) {
         return;
@@ -315,9 +386,7 @@ function handlePaletteKeydown(event) {
         return;
     }
 
-    const items = Array.from(
-        menuEl.querySelectorAll(".rm-menu-item.bp3-menu-item"),
-    ).filter((item) => item.getClientRects().length > 0);
+    const items = getVisibleItemsForKeydown(menuEl);
     if (items.length === 0) {
         return;
     }
@@ -435,81 +504,91 @@ function decorateAndApplyPinning(targetPortalEl) {
         return;
     }
     decorateInProgress = true;
+    try {
+        if (menuObserver) {
+            menuObserver.disconnect();
+        }
+        attachMenuObserver(targetPortalEl);
+        attachMenuClickHandler(menuEl);
+        ensureSortControls(targetPortalEl);
 
-    if (menuObserver) {
-        menuObserver.disconnect();
-    }
-    attachMenuObserver(targetPortalEl);
-    attachMenuClickHandler(menuEl);
-    ensureSortControls(targetPortalEl);
+        const items = Array.from(
+            menuEl.querySelectorAll(".rm-menu-item.bp3-menu-item"),
+        );
+        const itemsMeta = [];
 
-    const items = Array.from(
-        menuEl.querySelectorAll(".rm-menu-item.bp3-menu-item"),
-    );
-    const itemsMeta = [];
+        items.forEach((itemEl, index) => {
+            const { key, labelLower } = computeItemKey(itemEl);
+            if (key) itemEl.dataset.bcpKey = key;
 
-    items.forEach((itemEl, index) => {
-        const { key, labelLower } = computeItemKey(itemEl);
-        if (key) itemEl.dataset.bcpKey = key;
+            let baseIndex = index;
+            if (key) {
+                const existing = baseIndexMap.get(key);
+                if (typeof existing === "number") {
+                    baseIndex = existing;
+                } else {
+                    baseIndexMap.set(key, index);
+                    baseIndex = index;
+                }
+            }
 
-        let baseIndex = index;
-        if (key) {
-            const existing = baseIndexMap.get(key);
-            if (typeof existing === "number") {
-                baseIndex = existing;
-            } else {
-                baseIndexMap.set(key, index);
-                baseIndex = index;
+            const isPinned = key ? pinnedSet.has(key) : false;
+            ensureStar(itemEl, isPinned, key);
+
+            itemsMeta.push({ el: itemEl, key, labelLower, index, baseIndex });
+        });
+
+        reorderMenu(menuEl, itemsMeta);
+        menuVersion += 1;
+
+        if (needsInitialActive) {
+            const firstPinned = itemsMeta.find((item) => item.key && pinnedSet.has(item.key));
+            if (firstPinned) {
+                const currentActive = menuEl.querySelector(".rm-menu-item--active");
+                if (currentActive && currentActive !== firstPinned.el) {
+                    currentActive.classList.remove("rm-menu-item--active");
+                }
+                firstPinned.el.classList.add("rm-menu-item--active");
+                firstPinned.el.scrollIntoView({ block: "nearest" });
+                lastActiveKey = firstPinned.key || null;
+                needsInitialActive = false;
             }
         }
-
-        const isPinned = key ? pinnedSet.has(key) : false;
-        ensureStar(itemEl, isPinned, key);
-
-        itemsMeta.push({ el: itemEl, key, labelLower, index, baseIndex });
-    });
-
-    reorderMenu(menuEl, itemsMeta);
-    if (needsInitialActive) {
-        const firstPinned = itemsMeta.find((item) => item.key && pinnedSet.has(item.key));
-        if (firstPinned) {
+        if (!needsInitialActive && lastActiveKey) {
+            applyLastActive(menuEl, itemsMeta);
+        } else if (!lastActiveKey) {
             const currentActive = menuEl.querySelector(".rm-menu-item--active");
-            if (currentActive && currentActive !== firstPinned.el) {
-                currentActive.classList.remove("rm-menu-item--active");
+            if (currentActive?.dataset?.bcpKey) {
+                lastActiveKey = currentActive.dataset.bcpKey;
             }
-            firstPinned.el.classList.add("rm-menu-item--active");
-            firstPinned.el.scrollIntoView({ block: "nearest" });
-            lastActiveKey = firstPinned.key || null;
-            needsInitialActive = false;
+        }
+        normalizeActiveItem(menuEl);
+        scrollActiveItemIntoView(menuEl);
+        updateSortControlsState(targetPortalEl);
+        if (menuObserver) {
+            menuObserver.disconnect();
+            menuObserver.observe(menuEl, { childList: true, subtree: true });
+        }
+    } finally {
+        decorateInProgress = false;
+        if (decoratePending && !decorateRaf) {
+            scheduleDecorate();
         }
     }
-    if (!needsInitialActive && lastActiveKey) {
-        applyLastActive(menuEl, itemsMeta);
-    } else if (!lastActiveKey) {
-        const currentActive = menuEl.querySelector(".rm-menu-item--active");
-        if (currentActive?.dataset?.bcpKey) {
-            lastActiveKey = currentActive.dataset.bcpKey;
-        }
-    }
-    normalizeActiveItem(menuEl);
-    scrollActiveItemIntoView(menuEl);
-    updateSortControlsState(targetPortalEl);
-    if (menuObserver) {
-        menuObserver.disconnect();
-        menuObserver.observe(menuEl, { childList: true, subtree: true });
-    }
-    decorateInProgress = false;
 }
 
 function scheduleDecorate() {
-    if (decorateInProgress) {
+    decoratePending = true;
+    if (decorateRaf || decorateInProgress) {
         return;
     }
-    if (debounceTimer) {
-        cancelAnimationFrame(debounceTimer);
-    }
-    debounceTimer = requestAnimationFrame(() => {
-        debounceTimer = null;
+    decorateRaf = requestAnimationFrame(() => {
+        decorateRaf = null;
+        if (!decoratePending || !portalEl) {
+            decoratePending = false;
+            return;
+        }
+        decoratePending = false;
         decorateAndApplyPinning(portalEl);
     });
 }
@@ -640,6 +719,10 @@ function onPaletteOpen(nextPortalEl) {
   sessionSortMode = getGlobalSortMode();
   baseIndexMap = new Map();
   needsInitialActive = pinnedSet.size > 0;
+  menuVersion = 0;
+  keydownCacheVersion = -1;
+  keydownCacheMenuEl = null;
+  keydownVisibleItems = [];
   attachPaletteKeydownHandler();
   attachMenuObserver(nextPortalEl);
   ensureSortControls(nextPortalEl);
@@ -656,6 +739,11 @@ function onPaletteClose() {
     menuObservedEl = null;
     needsInitialActive = false;
     lastActiveKey = null;
+    menuVersion = 0;
+    keydownCacheVersion = -1;
+    keydownCacheMenuEl = null;
+    keydownVisibleItems = [];
+    decoratePending = false;
     if (menuObserver) {
         menuObserver.disconnect();
         menuObserver = null;
@@ -664,9 +752,9 @@ function onPaletteClose() {
         menuFinderObserver.disconnect();
         menuFinderObserver = null;
     }
-    if (debounceTimer) {
-        cancelAnimationFrame(debounceTimer);
-        debounceTimer = null;
+    if (decorateRaf) {
+        cancelAnimationFrame(decorateRaf);
+        decorateRaf = null;
     }
 }
 
