@@ -587,6 +587,9 @@ function decorateAndApplyPinning(targetPortalEl) {
         }
     } finally {
         decorateInProgress = false;
+        if (decoratePending && !decorateRaf) {
+            scheduleDecorate();
+        }
     }
 }
 
