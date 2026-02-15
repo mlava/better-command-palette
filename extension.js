@@ -82,15 +82,13 @@ function computeItemKey(itemEl) {
     }
     const rawLabel = labelSpan ? (labelSpan.textContent || "").trim() : "";
     if (!rawLabel) {
-        itemMetaCache.set(itemEl, {
-            ...cached,
-            labelSpan,
-            rawLabel: "",
-            shortcutText: "",
-            shortcutNorm: "",
-            labelLower: "",
-            key: null,
-        });
+        cached.labelSpan = labelSpan;
+        cached.rawLabel = "";
+        cached.shortcutText = "";
+        cached.shortcutNorm = "";
+        cached.labelLower = "";
+        cached.key = null;
+        itemMetaCache.set(itemEl, cached);
         return { key: null, labelLower: "" };
     }
 
@@ -123,18 +121,14 @@ function computeItemKey(itemEl) {
     }
 
     const key = shortcutNorm ? `${labelNorm}||${shortcutNorm}` : labelNorm;
-    itemEl.dataset.bcpLabelLower = labelNorm;
-    itemEl.dataset.bcpShortcutLower = shortcutNorm;
-    itemMetaCache.set(itemEl, {
-        ...cached,
-        labelSpan,
-        shortcutEls,
-        rawLabel,
-        shortcutText,
-        shortcutNorm,
-        labelLower: labelNorm,
-        key,
-    });
+    cached.labelSpan = labelSpan;
+    cached.shortcutEls = shortcutEls;
+    cached.rawLabel = rawLabel;
+    cached.shortcutText = shortcutText;
+    cached.shortcutNorm = shortcutNorm;
+    cached.labelLower = labelNorm;
+    cached.key = key;
+    itemMetaCache.set(itemEl, cached);
 
     return { key, labelLower: labelNorm };
 }
@@ -186,23 +180,18 @@ function ensureStar(itemEl, pinned, key) {
         labelContainer.prepend(starEl);
     }
 
-    if (key) {
+    if (key && starEl.dataset.bcpKey !== key) {
         starEl.dataset.bcpKey = key;
     }
 
     const nextPinned = pinned ? "1" : "0";
-    if (
-        starEl.getAttribute("data-pinned") !== nextPinned ||
-        (key && starEl.dataset.bcpKey !== key)
-    ) {
+    if (starEl.getAttribute("data-pinned") !== nextPinned) {
         setStarState(starEl, pinned);
     }
 
-    itemMetaCache.set(itemEl, {
-        ...cached,
-        labelContainer,
-        starEl,
-    });
+    cached.labelContainer = labelContainer;
+    cached.starEl = starEl;
+    itemMetaCache.set(itemEl, cached);
 }
 
 function onStarClick(event) {
@@ -551,11 +540,6 @@ function decorateAndApplyPinning(targetPortalEl) {
 
         reorderMenu(menuEl, itemsMeta);
         menuVersion += 1;
-        keydownCacheMenuEl = menuEl;
-        keydownVisibleItems = Array.from(
-            menuEl.querySelectorAll(".rm-menu-item.bp3-menu-item"),
-        ).filter((item) => item.getClientRects().length > 0);
-        keydownCacheVersion = menuVersion;
 
         if (needsInitialActive) {
             const firstPinned = itemsMeta.find((item) => item.key && pinnedSet.has(item.key));
@@ -606,9 +590,6 @@ function scheduleDecorate() {
         }
         decoratePending = false;
         decorateAndApplyPinning(portalEl);
-        if (decoratePending) {
-            scheduleDecorate();
-        }
     });
 }
 
