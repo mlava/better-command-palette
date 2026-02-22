@@ -306,12 +306,22 @@ function handlePaletteKeydown(event) {
     if (!paletteOpen || !portalEl) {
         return;
     }
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") {
         return;
     }
 
     const menuEl = portalEl.querySelector(".rm-command-palette__menu");
     if (!menuEl || menuEl.dataset.bcpReordered !== "1") {
+        return;
+    }
+
+    if (event.key === "Enter") {
+        const activeItem = menuEl.querySelector(".rm-menu-item--active");
+        if (activeItem) {
+            event.preventDefault();
+            event.stopPropagation();
+            activeItem.click();
+        }
         return;
     }
 
