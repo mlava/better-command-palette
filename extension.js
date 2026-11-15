@@ -25,10 +25,6 @@ let needsInitialActive = false;
 let lastActiveKey = null;
 let menuClickHandler = null;
 let menuClickTarget = null;
-let menuVersion = 0;
-let keydownCacheVersion = -1;
-let keydownCacheMenuEl = null;
-let keydownVisibleItems = [];
 const itemMetaCache = new WeakMap();
 
 function normalizeText(text) {
@@ -85,7 +81,6 @@ function computeItemKey(itemEl) {
         cached.labelSpan = labelSpan;
         cached.rawLabel = "";
         cached.shortcutText = "";
-        cached.shortcutNorm = "";
         cached.labelLower = "";
         cached.key = null;
         itemMetaCache.set(itemEl, cached);
@@ -97,15 +92,9 @@ function computeItemKey(itemEl) {
         return { key: null, labelLower: "" };
     }
 
-    let shortcutEls = cached.shortcutEls;
-    if (
-        !Array.isArray(shortcutEls) ||
-        shortcutEls.some((el) => !itemEl.contains(el))
-    ) {
-        shortcutEls = Array.from(
-            itemEl.querySelectorAll(".rm-command-palette__shortcut"),
-        );
-    }
+    const shortcutEls = Array.from(
+        itemEl.querySelectorAll(".rm-command-palette__shortcut"),
+    );
     const shortcutText = shortcutEls
         .map((el) => (el.textContent || "").trim())
         .filter(Boolean)
@@ -117,15 +106,14 @@ function computeItemKey(itemEl) {
         cached.rawLabel === rawLabel &&
         cached.shortcutText === shortcutText
     ) {
+        cached.labelSpan = labelSpan;
         return { key: cached.key, labelLower: cached.labelLower };
     }
 
     const key = shortcutNorm ? `${labelNorm}||${shortcutNorm}` : labelNorm;
     cached.labelSpan = labelSpan;
-    cached.shortcutEls = shortcutEls;
     cached.rawLabel = rawLabel;
     cached.shortcutText = shortcutText;
-    cached.shortcutNorm = shortcutNorm;
     cached.labelLower = labelNorm;
     cached.key = key;
     itemMetaCache.set(itemEl, cached);
@@ -150,7 +138,9 @@ function setStarState(starEl, pinned) {
     if (starEl.getAttribute("aria-label") !== nextLabel) {
         starEl.setAttribute("aria-label", nextLabel);
     }
-    starEl.title = nextLabel;
+    if (starEl.title !== nextLabel) {
+        starEl.title = nextLabel;
+    }
 }
 
 function ensureStar(itemEl, pinned, key) {
@@ -184,10 +174,7 @@ function ensureStar(itemEl, pinned, key) {
         starEl.dataset.bcpKey = key;
     }
 
-    const nextPinned = pinned ? "1" : "0";
-    if (starEl.getAttribute("data-pinned") !== nextPinned) {
-        setStarState(starEl, pinned);
-    }
+    setStarState(starEl, pinned);
 
     cached.labelContainer = labelContainer;
     cached.starEl = starEl;
@@ -241,86 +228,88 @@ function compareLabels(a, b, direction) {
 
 function reorderMenu(menuEl, items) {
     reorderInProgress = true;
-    const wasReordered = menuEl.dataset.bcpReordered === "1";
-    const pinnedItems = items.filter((item) => item.key && pinnedSet.has(item.key));
-    const unpinnedItems = items.filter(
-        (item) => !item.key || !pinnedSet.has(item.key),
-    );
-    const sortMode = getEffectiveSortMode();
-    const hasCustomOrder = pinnedItems.length > 0 || sortMode !== SORT_MODE_DEFAULT;
-    const nextReordered = hasCustomOrder ? "1" : "0";
-    if (menuEl.dataset.bcpReordered !== nextReordered) {
-        menuEl.dataset.bcpReordered = nextReordered;
-    }
-    const needSeparator = pinnedItems.length > 0 && unpinnedItems.length > 0;
-    let separatorEl = menuEl.querySelector(`[${SEPARATOR_ATTR}="1"]`);
-    if (needSeparator) {
-        if (!separatorEl) {
-            separatorEl = document.createElement("div");
-            separatorEl.className = "bp3-menu-divider bcp-menu-divider";
-            separatorEl.setAttribute(SEPARATOR_ATTR, "1");
-            separatorEl.setAttribute("role", "separator");
+    try {
+        const wasReordered = menuEl.dataset.bcpReordered === "1";
+        const pinnedItems = items.filter((item) => item.key && pinnedSet.has(item.key));
+        const unpinnedItems = items.filter(
+            (item) => !item.key || !pinnedSet.has(item.key),
+        );
+        const sortMode = getEffectiveSortMode();
+        const hasCustomOrder = pinnedItems.length > 0 || sortMode !== SORT_MODE_DEFAULT;
+        const nextReordered = hasCustomOrder ? "1" : "0";
+        const needSeparator = pinnedItems.length > 0 && unpinnedItems.length > 0;
+        let separatorEl = menuEl.querySelector(`[${SEPARATOR_ATTR}="1"]`);
+        if (needSeparator) {
+            if (!separatorEl) {
+                separatorEl = document.createElement("div");
+                separatorEl.className = "bp3-menu-divider bcp-menu-divider";
+                separatorEl.setAttribute(SEPARATOR_ATTR, "1");
+                separatorEl.setAttribute("role", "separator");
+            }
+        } else if (separatorEl) {
+            separatorEl.remove();
+            separatorEl = null;
         }
-    } else if (separatorEl) {
-        separatorEl.remove();
-        separatorEl = null;
-    }
 
-    if (!hasCustomOrder && !wasReordered) {
-        reorderInProgress = false;
-        return;
-    }
-
-    pinnedItems.sort((a, b) => {
-        const labelCompare = compareLabels(a, b, 1);
-        if (labelCompare !== 0) {
-            return labelCompare;
+        if (!hasCustomOrder && !wasReordered) {
+            if (menuEl.dataset.bcpReordered !== nextReordered) {
+                menuEl.dataset.bcpReordered = nextReordered;
+            }
+            return;
         }
-        return a.baseIndex - b.baseIndex;
-    });
 
-    if (sortMode === "A → Z") {
-        unpinnedItems.sort((a, b) => {
+        pinnedItems.sort((a, b) => {
             const labelCompare = compareLabels(a, b, 1);
             if (labelCompare !== 0) {
                 return labelCompare;
             }
             return a.baseIndex - b.baseIndex;
         });
-    } else if (sortMode === "Z → A") {
-        unpinnedItems.sort((a, b) => {
-            const labelCompare = compareLabels(a, b, -1);
-            if (labelCompare !== 0) {
-                return labelCompare;
-            }
-            return a.baseIndex - b.baseIndex;
-        });
-    } else {
-        unpinnedItems.sort((a, b) => a.baseIndex - b.baseIndex);
-    }
 
-    const desiredOrder = [
-        ...pinnedItems.map((item) => item.el),
-        ...(needSeparator && separatorEl ? [separatorEl] : []),
-        ...unpinnedItems.map((item) => item.el),
-    ];
-    const currentOrder = Array.from(menuEl.children).filter(
-        (el) =>
-            el.matches(".rm-menu-item.bp3-menu-item") ||
-            el.getAttribute(SEPARATOR_ATTR) === "1",
-    );
-    const isSameOrder =
-        desiredOrder.length === currentOrder.length &&
-        desiredOrder.every((el, idx) => el === currentOrder[idx]);
-    if (isSameOrder) {
+        if (sortMode === "A → Z") {
+            unpinnedItems.sort((a, b) => {
+                const labelCompare = compareLabels(a, b, 1);
+                if (labelCompare !== 0) {
+                    return labelCompare;
+                }
+                return a.baseIndex - b.baseIndex;
+            });
+        } else if (sortMode === "Z → A") {
+            unpinnedItems.sort((a, b) => {
+                const labelCompare = compareLabels(a, b, -1);
+                if (labelCompare !== 0) {
+                    return labelCompare;
+                }
+                return a.baseIndex - b.baseIndex;
+            });
+        } else {
+            unpinnedItems.sort((a, b) => a.baseIndex - b.baseIndex);
+        }
+
+        const desiredOrder = [
+            ...pinnedItems.map((item) => item.el),
+            ...(needSeparator && separatorEl ? [separatorEl] : []),
+            ...unpinnedItems.map((item) => item.el),
+        ];
+        const currentOrder = Array.from(menuEl.children).filter(
+            (el) =>
+                el.matches(".rm-menu-item.bp3-menu-item") ||
+                el.getAttribute(SEPARATOR_ATTR) === "1",
+        );
+        const isSameOrder =
+            desiredOrder.length === currentOrder.length &&
+            desiredOrder.every((el, idx) => el === currentOrder[idx]);
+        if (!isSameOrder) {
+            const fragment = document.createDocumentFragment();
+            desiredOrder.forEach((el) => fragment.appendChild(el));
+            menuEl.appendChild(fragment);
+        }
+        if (menuEl.dataset.bcpReordered !== nextReordered) {
+            menuEl.dataset.bcpReordered = nextReordered;
+        }
+    } finally {
         reorderInProgress = false;
-        return;
     }
-
-    const fragment = document.createDocumentFragment();
-    desiredOrder.forEach((el) => fragment.appendChild(el));
-    menuEl.appendChild(fragment);
-    reorderInProgress = false;
 }
 
 function scrollActiveItemIntoView(menuEl) {
@@ -354,30 +343,11 @@ function normalizeActiveItem(menuEl) {
     }
 }
 
-function getVisibleItemsForKeydown(menuEl) {
-    if (!menuEl) return [];
-
-    if (
-        !decoratePending &&
-        keydownCacheMenuEl === menuEl &&
-        keydownCacheVersion === menuVersion
-    ) {
-        return keydownVisibleItems;
-    }
-
-    keydownVisibleItems = Array.from(
-        menuEl.querySelectorAll(".rm-menu-item.bp3-menu-item"),
-    ).filter((item) => item.getClientRects().length > 0);
-    keydownCacheMenuEl = menuEl;
-    keydownCacheVersion = menuVersion;
-    return keydownVisibleItems;
-}
-
 function handlePaletteKeydown(event) {
     if (!paletteOpen || !portalEl) {
         return;
     }
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") {
         return;
     }
 
@@ -386,7 +356,19 @@ function handlePaletteKeydown(event) {
         return;
     }
 
-    const items = getVisibleItemsForKeydown(menuEl);
+    if (event.key === "Enter") {
+        const activeItem = menuEl.querySelector(".rm-menu-item--active");
+        if (activeItem) {
+            event.preventDefault();
+            event.stopPropagation();
+            activeItem.click();
+        }
+        return;
+    }
+
+    const items = Array.from(
+        menuEl.querySelectorAll(".rm-menu-item.bp3-menu-item"),
+    ).filter((item) => item.getClientRects().length > 0);
     if (items.length === 0) {
         return;
     }
@@ -519,7 +501,7 @@ function decorateAndApplyPinning(targetPortalEl) {
 
         items.forEach((itemEl, index) => {
             const { key, labelLower } = computeItemKey(itemEl);
-            if (key) itemEl.dataset.bcpKey = key;
+            if (key && itemEl.dataset.bcpKey !== key) itemEl.dataset.bcpKey = key;
 
             let baseIndex = index;
             if (key) {
@@ -539,7 +521,6 @@ function decorateAndApplyPinning(targetPortalEl) {
         });
 
         reorderMenu(menuEl, itemsMeta);
-        menuVersion += 1;
 
         if (needsInitialActive) {
             const firstPinned = itemsMeta.find((item) => item.key && pinnedSet.has(item.key));
@@ -565,11 +546,11 @@ function decorateAndApplyPinning(targetPortalEl) {
         normalizeActiveItem(menuEl);
         scrollActiveItemIntoView(menuEl);
         updateSortControlsState(targetPortalEl);
-        if (menuObserver) {
+    } finally {
+        if (menuObserver && menuObservedEl === menuEl) {
             menuObserver.disconnect();
             menuObserver.observe(menuEl, { childList: true, subtree: true });
         }
-    } finally {
         decorateInProgress = false;
         if (decoratePending && !decorateRaf) {
             scheduleDecorate();
@@ -719,10 +700,6 @@ function onPaletteOpen(nextPortalEl) {
   sessionSortMode = getGlobalSortMode();
   baseIndexMap = new Map();
   needsInitialActive = pinnedSet.size > 0;
-  menuVersion = 0;
-  keydownCacheVersion = -1;
-  keydownCacheMenuEl = null;
-  keydownVisibleItems = [];
   attachPaletteKeydownHandler();
   attachMenuObserver(nextPortalEl);
   ensureSortControls(nextPortalEl);
@@ -739,10 +716,6 @@ function onPaletteClose() {
     menuObservedEl = null;
     needsInitialActive = false;
     lastActiveKey = null;
-    menuVersion = 0;
-    keydownCacheVersion = -1;
-    keydownCacheMenuEl = null;
-    keydownVisibleItems = [];
     decoratePending = false;
     if (menuObserver) {
         menuObserver.disconnect();
