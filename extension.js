@@ -172,6 +172,9 @@ function ensureStar(itemEl, pinned, key) {
 
     if (key && starEl.dataset.bcpKey !== key) {
         starEl.dataset.bcpKey = key;
+    } else if (!key && starEl.dataset.bcpKey) {
+        // Recycled item with no label: drop the previous command's key.
+        delete starEl.dataset.bcpKey;
     }
 
     setStarState(starEl, pinned);
@@ -502,6 +505,7 @@ function decorateAndApplyPinning(targetPortalEl) {
         items.forEach((itemEl, index) => {
             const { key, labelLower } = computeItemKey(itemEl);
             if (key && itemEl.dataset.bcpKey !== key) itemEl.dataset.bcpKey = key;
+            else if (!key && itemEl.dataset.bcpKey) delete itemEl.dataset.bcpKey;
 
             let baseIndex = index;
             if (key) {
@@ -763,7 +767,7 @@ function startPortalObserver() {
 
     portalObserver = new MutationObserver((mutations) => {
         if (paletteOpen) {
-            if (portalEl && !document.body.contains(portalEl)) {
+            if (portalEl && !portalEl.isConnected) {
                 onPaletteClose();
             }
             return;
@@ -789,12 +793,22 @@ function stopPortalObserver() {
         portalObserver.disconnect();
         portalObserver = null;
     }
+    if (portalCheckRaf) {
+        cancelAnimationFrame(portalCheckRaf);
+        portalCheckRaf = null;
+    }
 }
 
 export default {
     onload({ extensionAPI }) {
         extensionAPIRef = extensionAPI;
         pinnedSet = loadPinnedSet(extensionAPIRef);
+
+        // Seed the select default so the Depot dropdown doesn't render blank.
+        // Only when unset — never overwrite an existing stored value.
+        if (extensionAPI.settings.get("bcp_sort_mode") === undefined) {
+            extensionAPI.settings.set("bcp_sort_mode", SORT_MODE_DEFAULT);
+        }
 
         extensionAPI.settings.panel.create({
             tabTitle: "Better Command Palette",
