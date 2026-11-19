@@ -15,7 +15,8 @@ let menuObservedEl = null;
 let portalObserver = null;
 let menuObserver = null;
 let menuFinderObserver = null;
-let debounceTimer = null;
+let decorateRaf = null;
+let decoratePending = false;
 let reorderInProgress = false;
 let decorateInProgress = false;
 let paletteKeydownHandler = null;
@@ -24,6 +25,7 @@ let needsInitialActive = false;
 let lastActiveKey = null;
 let menuClickHandler = null;
 let menuClickTarget = null;
+const itemMetaCache = new WeakMap();
 
 function normalizeText(text) {
     return text.trim().replace(/\s+/g, " ").toLowerCase();
@@ -69,9 +71,19 @@ function findPalettePortal() {
 }
 
 function computeItemKey(itemEl) {
-    const labelSpan = itemEl.querySelector(".rm-command-palette__label span");
-    const rawLabel = labelSpan ? labelSpan.textContent.trim() : "";
+    const cached = itemMetaCache.get(itemEl) || {};
+    let labelSpan = cached.labelSpan;
+    if (!labelSpan || !itemEl.contains(labelSpan)) {
+        labelSpan = itemEl.querySelector(".rm-command-palette__label span");
+    }
+    const rawLabel = labelSpan ? (labelSpan.textContent || "").trim() : "";
     if (!rawLabel) {
+        cached.labelSpan = labelSpan;
+        cached.rawLabel = "";
+        cached.shortcutText = "";
+        cached.labelLower = "";
+        cached.key = null;
+        itemMetaCache.set(itemEl, cached);
         return { key: null, labelLower: "" };
     }
 
@@ -80,23 +92,31 @@ function computeItemKey(itemEl) {
         return { key: null, labelLower: "" };
     }
 
-    const shortcutEls = itemEl.querySelectorAll(".rm-command-palette__shortcut");
-    const shortcutText = Array.from(shortcutEls)
+    const shortcutEls = Array.from(
+        itemEl.querySelectorAll(".rm-command-palette__shortcut"),
+    );
+    const shortcutText = shortcutEls
         .map((el) => (el.textContent || "").trim())
         .filter(Boolean)
         .join(",");
     const shortcutNorm = shortcutText ? normalizeText(shortcutText) : "";
 
-    const cachedLabel = itemEl.dataset.bcpLabelLower;
-    const cachedShortcut = itemEl.dataset.bcpShortcutLower;
-    const cachedKey = itemEl.dataset.bcpKey;
-    if (cachedKey && cachedLabel === labelNorm && cachedShortcut === shortcutNorm) {
-        return { key: cachedKey, labelLower: labelNorm };
+    if (
+        cached.key &&
+        cached.rawLabel === rawLabel &&
+        cached.shortcutText === shortcutText
+    ) {
+        cached.labelSpan = labelSpan;
+        return { key: cached.key, labelLower: cached.labelLower };
     }
 
     const key = shortcutNorm ? `${labelNorm}||${shortcutNorm}` : labelNorm;
-    itemEl.dataset.bcpLabelLower = labelNorm;
-    itemEl.dataset.bcpShortcutLower = shortcutNorm;
+    cached.labelSpan = labelSpan;
+    cached.rawLabel = rawLabel;
+    cached.shortcutText = shortcutText;
+    cached.labelLower = labelNorm;
+    cached.key = key;
+    itemMetaCache.set(itemEl, cached);
 
     return { key, labelLower: labelNorm };
 }
@@ -118,16 +138,25 @@ function setStarState(starEl, pinned) {
     if (starEl.getAttribute("aria-label") !== nextLabel) {
         starEl.setAttribute("aria-label", nextLabel);
     }
-    starEl.title = nextLabel;
+    if (starEl.title !== nextLabel) {
+        starEl.title = nextLabel;
+    }
 }
 
 function ensureStar(itemEl, pinned, key) {
-    const labelContainer = itemEl.querySelector(".rm-command-palette__label");
+    const cached = itemMetaCache.get(itemEl) || {};
+    let labelContainer = cached.labelContainer;
+    if (!labelContainer || !itemEl.contains(labelContainer)) {
+        labelContainer = itemEl.querySelector(".rm-command-palette__label");
+    }
     if (!labelContainer) {
         return;
     }
 
-    let starEl = labelContainer.querySelector(`[${STAR_ATTR}="1"]`);
+    let starEl = cached.starEl;
+    if (!starEl || !labelContainer.contains(starEl)) {
+        starEl = labelContainer.querySelector(`[${STAR_ATTR}="1"]`);
+    }
     if (!starEl) {
         starEl = document.createElement("button");
         starEl.type = "button";
@@ -141,11 +170,15 @@ function ensureStar(itemEl, pinned, key) {
         labelContainer.prepend(starEl);
     }
 
-    if (key) {
+    if (key && starEl.dataset.bcpKey !== key) {
         starEl.dataset.bcpKey = key;
     }
 
     setStarState(starEl, pinned);
+
+    cached.labelContainer = labelContainer;
+    cached.starEl = starEl;
+    itemMetaCache.set(itemEl, cached);
 }
 
 function onStarClick(event) {
@@ -195,80 +228,88 @@ function compareLabels(a, b, direction) {
 
 function reorderMenu(menuEl, items) {
     reorderInProgress = true;
-    const pinnedItems = items.filter((item) => item.key && pinnedSet.has(item.key));
-    const unpinnedItems = items.filter(
-        (item) => !item.key || !pinnedSet.has(item.key),
-    );
-    const sortMode = getEffectiveSortMode();
-    const hasCustomOrder = pinnedItems.length > 0 || sortMode !== SORT_MODE_DEFAULT;
-    const nextReordered = hasCustomOrder ? "1" : "0";
-    if (menuEl.dataset.bcpReordered !== nextReordered) {
-        menuEl.dataset.bcpReordered = nextReordered;
-    }
-    const needSeparator = pinnedItems.length > 0 && unpinnedItems.length > 0;
-    let separatorEl = menuEl.querySelector(`[${SEPARATOR_ATTR}="1"]`);
-    if (needSeparator) {
-        if (!separatorEl) {
-            separatorEl = document.createElement("div");
-            separatorEl.className = "bp3-menu-divider bcp-menu-divider";
-            separatorEl.setAttribute(SEPARATOR_ATTR, "1");
-            separatorEl.setAttribute("role", "separator");
+    try {
+        const wasReordered = menuEl.dataset.bcpReordered === "1";
+        const pinnedItems = items.filter((item) => item.key && pinnedSet.has(item.key));
+        const unpinnedItems = items.filter(
+            (item) => !item.key || !pinnedSet.has(item.key),
+        );
+        const sortMode = getEffectiveSortMode();
+        const hasCustomOrder = pinnedItems.length > 0 || sortMode !== SORT_MODE_DEFAULT;
+        const nextReordered = hasCustomOrder ? "1" : "0";
+        const needSeparator = pinnedItems.length > 0 && unpinnedItems.length > 0;
+        let separatorEl = menuEl.querySelector(`[${SEPARATOR_ATTR}="1"]`);
+        if (needSeparator) {
+            if (!separatorEl) {
+                separatorEl = document.createElement("div");
+                separatorEl.className = "bp3-menu-divider bcp-menu-divider";
+                separatorEl.setAttribute(SEPARATOR_ATTR, "1");
+                separatorEl.setAttribute("role", "separator");
+            }
+        } else if (separatorEl) {
+            separatorEl.remove();
+            separatorEl = null;
         }
-    } else if (separatorEl) {
-        separatorEl.remove();
-        separatorEl = null;
-    }
 
-    pinnedItems.sort((a, b) => {
-        const labelCompare = compareLabels(a, b, 1);
-        if (labelCompare !== 0) {
-            return labelCompare;
+        if (!hasCustomOrder && !wasReordered) {
+            if (menuEl.dataset.bcpReordered !== nextReordered) {
+                menuEl.dataset.bcpReordered = nextReordered;
+            }
+            return;
         }
-        return a.baseIndex - b.baseIndex;
-    });
 
-    if (sortMode === "A → Z") {
-        unpinnedItems.sort((a, b) => {
+        pinnedItems.sort((a, b) => {
             const labelCompare = compareLabels(a, b, 1);
             if (labelCompare !== 0) {
                 return labelCompare;
             }
             return a.baseIndex - b.baseIndex;
         });
-    } else if (sortMode === "Z → A") {
-        unpinnedItems.sort((a, b) => {
-            const labelCompare = compareLabels(a, b, -1);
-            if (labelCompare !== 0) {
-                return labelCompare;
-            }
-            return a.baseIndex - b.baseIndex;
-        });
-    } else {
-        unpinnedItems.sort((a, b) => a.baseIndex - b.baseIndex);
-    }
 
-    const desiredOrder = [
-        ...pinnedItems.map((item) => item.el),
-        ...(needSeparator && separatorEl ? [separatorEl] : []),
-        ...unpinnedItems.map((item) => item.el),
-    ];
-    const currentOrder = Array.from(menuEl.children).filter(
-        (el) =>
-            el.matches(".rm-menu-item.bp3-menu-item") ||
-            el.getAttribute(SEPARATOR_ATTR) === "1",
-    );
-    const isSameOrder =
-        desiredOrder.length === currentOrder.length &&
-        desiredOrder.every((el, idx) => el === currentOrder[idx]);
-    if (isSameOrder) {
+        if (sortMode === "A → Z") {
+            unpinnedItems.sort((a, b) => {
+                const labelCompare = compareLabels(a, b, 1);
+                if (labelCompare !== 0) {
+                    return labelCompare;
+                }
+                return a.baseIndex - b.baseIndex;
+            });
+        } else if (sortMode === "Z → A") {
+            unpinnedItems.sort((a, b) => {
+                const labelCompare = compareLabels(a, b, -1);
+                if (labelCompare !== 0) {
+                    return labelCompare;
+                }
+                return a.baseIndex - b.baseIndex;
+            });
+        } else {
+            unpinnedItems.sort((a, b) => a.baseIndex - b.baseIndex);
+        }
+
+        const desiredOrder = [
+            ...pinnedItems.map((item) => item.el),
+            ...(needSeparator && separatorEl ? [separatorEl] : []),
+            ...unpinnedItems.map((item) => item.el),
+        ];
+        const currentOrder = Array.from(menuEl.children).filter(
+            (el) =>
+                el.matches(".rm-menu-item.bp3-menu-item") ||
+                el.getAttribute(SEPARATOR_ATTR) === "1",
+        );
+        const isSameOrder =
+            desiredOrder.length === currentOrder.length &&
+            desiredOrder.every((el, idx) => el === currentOrder[idx]);
+        if (!isSameOrder) {
+            const fragment = document.createDocumentFragment();
+            desiredOrder.forEach((el) => fragment.appendChild(el));
+            menuEl.appendChild(fragment);
+        }
+        if (menuEl.dataset.bcpReordered !== nextReordered) {
+            menuEl.dataset.bcpReordered = nextReordered;
+        }
+    } finally {
         reorderInProgress = false;
-        return;
     }
-
-    const fragment = document.createDocumentFragment();
-    desiredOrder.forEach((el) => fragment.appendChild(el));
-    menuEl.appendChild(fragment);
-    reorderInProgress = false;
 }
 
 function scrollActiveItemIntoView(menuEl) {
@@ -445,81 +486,90 @@ function decorateAndApplyPinning(targetPortalEl) {
         return;
     }
     decorateInProgress = true;
+    try {
+        if (menuObserver) {
+            menuObserver.disconnect();
+        }
+        attachMenuObserver(targetPortalEl);
+        attachMenuClickHandler(menuEl);
+        ensureSortControls(targetPortalEl);
 
-    if (menuObserver) {
-        menuObserver.disconnect();
-    }
-    attachMenuObserver(targetPortalEl);
-    attachMenuClickHandler(menuEl);
-    ensureSortControls(targetPortalEl);
+        const items = Array.from(
+            menuEl.querySelectorAll(".rm-menu-item.bp3-menu-item"),
+        );
+        const itemsMeta = [];
 
-    const items = Array.from(
-        menuEl.querySelectorAll(".rm-menu-item.bp3-menu-item"),
-    );
-    const itemsMeta = [];
+        items.forEach((itemEl, index) => {
+            const { key, labelLower } = computeItemKey(itemEl);
+            if (key && itemEl.dataset.bcpKey !== key) itemEl.dataset.bcpKey = key;
 
-    items.forEach((itemEl, index) => {
-        const { key, labelLower } = computeItemKey(itemEl);
-        if (key) itemEl.dataset.bcpKey = key;
+            let baseIndex = index;
+            if (key) {
+                const existing = baseIndexMap.get(key);
+                if (typeof existing === "number") {
+                    baseIndex = existing;
+                } else {
+                    baseIndexMap.set(key, index);
+                    baseIndex = index;
+                }
+            }
 
-        let baseIndex = index;
-        if (key) {
-            const existing = baseIndexMap.get(key);
-            if (typeof existing === "number") {
-                baseIndex = existing;
-            } else {
-                baseIndexMap.set(key, index);
-                baseIndex = index;
+            const isPinned = key ? pinnedSet.has(key) : false;
+            ensureStar(itemEl, isPinned, key);
+
+            itemsMeta.push({ el: itemEl, key, labelLower, index, baseIndex });
+        });
+
+        reorderMenu(menuEl, itemsMeta);
+
+        if (needsInitialActive) {
+            const firstPinned = itemsMeta.find((item) => item.key && pinnedSet.has(item.key));
+            if (firstPinned) {
+                const currentActive = menuEl.querySelector(".rm-menu-item--active");
+                if (currentActive && currentActive !== firstPinned.el) {
+                    currentActive.classList.remove("rm-menu-item--active");
+                }
+                firstPinned.el.classList.add("rm-menu-item--active");
+                firstPinned.el.scrollIntoView({ block: "nearest" });
+                lastActiveKey = firstPinned.key || null;
+                needsInitialActive = false;
             }
         }
-
-        const isPinned = key ? pinnedSet.has(key) : false;
-        ensureStar(itemEl, isPinned, key);
-
-        itemsMeta.push({ el: itemEl, key, labelLower, index, baseIndex });
-    });
-
-    reorderMenu(menuEl, itemsMeta);
-    if (needsInitialActive) {
-        const firstPinned = itemsMeta.find((item) => item.key && pinnedSet.has(item.key));
-        if (firstPinned) {
+        if (!needsInitialActive && lastActiveKey) {
+            applyLastActive(menuEl, itemsMeta);
+        } else if (!lastActiveKey) {
             const currentActive = menuEl.querySelector(".rm-menu-item--active");
-            if (currentActive && currentActive !== firstPinned.el) {
-                currentActive.classList.remove("rm-menu-item--active");
+            if (currentActive?.dataset?.bcpKey) {
+                lastActiveKey = currentActive.dataset.bcpKey;
             }
-            firstPinned.el.classList.add("rm-menu-item--active");
-            firstPinned.el.scrollIntoView({ block: "nearest" });
-            lastActiveKey = firstPinned.key || null;
-            needsInitialActive = false;
+        }
+        normalizeActiveItem(menuEl);
+        scrollActiveItemIntoView(menuEl);
+        updateSortControlsState(targetPortalEl);
+    } finally {
+        if (menuObserver && menuObservedEl === menuEl) {
+            menuObserver.disconnect();
+            menuObserver.observe(menuEl, { childList: true, subtree: true });
+        }
+        decorateInProgress = false;
+        if (decoratePending && !decorateRaf) {
+            scheduleDecorate();
         }
     }
-    if (!needsInitialActive && lastActiveKey) {
-        applyLastActive(menuEl, itemsMeta);
-    } else if (!lastActiveKey) {
-        const currentActive = menuEl.querySelector(".rm-menu-item--active");
-        if (currentActive?.dataset?.bcpKey) {
-            lastActiveKey = currentActive.dataset.bcpKey;
-        }
-    }
-    normalizeActiveItem(menuEl);
-    scrollActiveItemIntoView(menuEl);
-    updateSortControlsState(targetPortalEl);
-    if (menuObserver) {
-        menuObserver.disconnect();
-        menuObserver.observe(menuEl, { childList: true, subtree: true });
-    }
-    decorateInProgress = false;
 }
 
 function scheduleDecorate() {
-    if (decorateInProgress) {
+    decoratePending = true;
+    if (decorateRaf || decorateInProgress) {
         return;
     }
-    if (debounceTimer) {
-        cancelAnimationFrame(debounceTimer);
-    }
-    debounceTimer = requestAnimationFrame(() => {
-        debounceTimer = null;
+    decorateRaf = requestAnimationFrame(() => {
+        decorateRaf = null;
+        if (!decoratePending || !portalEl) {
+            decoratePending = false;
+            return;
+        }
+        decoratePending = false;
         decorateAndApplyPinning(portalEl);
     });
 }
@@ -666,6 +716,7 @@ function onPaletteClose() {
     menuObservedEl = null;
     needsInitialActive = false;
     lastActiveKey = null;
+    decoratePending = false;
     if (menuObserver) {
         menuObserver.disconnect();
         menuObserver = null;
@@ -674,9 +725,9 @@ function onPaletteClose() {
         menuFinderObserver.disconnect();
         menuFinderObserver = null;
     }
-    if (debounceTimer) {
-        cancelAnimationFrame(debounceTimer);
-        debounceTimer = null;
+    if (decorateRaf) {
+        cancelAnimationFrame(decorateRaf);
+        decorateRaf = null;
     }
 }
 
